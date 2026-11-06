@@ -1,0 +1,23 @@
+# Compiled binaries
+mig-test-app
+*.exe
+*.dll
+*.so
+*.dylib
+build/
+dist/
+
+# Go test & coverage artifacts
+*.test
+*.out
+
+# Packer cache & crash logs
+packer_cache/
+crash.log
+*.pkrvars.local.hcl
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

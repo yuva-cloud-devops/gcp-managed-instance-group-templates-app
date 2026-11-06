@@ -1,0 +1,65 @@
+steps:
+  # 1. Build static Linux Go binary
+  - id: "build-go-binary"
+    name: "golang:latest"
+    env:
+      - "CGO_ENABLED=0"
+      - "GOOS=linux"
+      - "GOARCH=amd64"
+    script: |
+      mkdir -p build
+      go build -o build/mig-test-app .
+
+  # 2. Initialize Packer plugin
+  - id: "packer-init"
+    name: "hashicorp/packer:latest"
+    args:
+      - "init"
+      - "packer/mig-test-app.pkr.hcl"
+
+  # 3. Build Golden Image with Packer
+  - id: "packer-build"
+    name: "hashicorp/packer:latest"
+    args:
+      - "build"
+      - "-var"
+      - "project_id=${PROJECT_ID}"
+      - "-var"
+      - "zone=${_ZONE}"
+      - "packer/mig-test-app.pkr.hcl"
+
+  # 4. Get the created image JSON metadata and store in GCS
+  - id: "export-image-metadata-to-gcs"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      echo "==> Fetching latest Golden Image metadata for family mig-test-app..."
+      gcloud compute images describe-from-family mig-test-app \
+        --project="${PROJECT_ID}" \
+        --format="json" > image-metadata.json
+
+      IMAGE_NAME=$(gcloud compute images describe-from-family mig-test-app \
+        --project="${PROJECT_ID}" \
+        --format="value(name)")
+
+      echo "==> Generated JSON metadata for image: $${IMAGE_NAME}"
+      cat image-metadata.json
+
+      # DEST="gs://${_METADATA_BUCKET}/image-metadata/${IMAGE_NAME}/${SHORT_SHA}/image-metadata.json
+
+      echo "....................................................................................."
+      echo "📦 Uploading image metadata json to: $${DEST}"
+      gsutil cp image-metadata.json "$${DEST}"
+
+      echo "....................................................................................."
+
+substitutions:
+  _ZONE: "asia-south1-a"
+  _METADATA_BUCKET: "gcp-tfplans-instancetemplate-strorage-bucket"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"
