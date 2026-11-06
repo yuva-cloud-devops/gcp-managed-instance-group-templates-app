@@ -1,0 +1,20 @@
+[Unit]
+Description=GCP MIG Test Application
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mig-test-app
+Restart=always
+RestartSec=5
+
+Environment=PORT=8080
+Environment=VERSION=v1.0.0
+Environment=ENVIRONMENT=prod
+Environment=BUILD_ID=packer-image-v1
+
+User=nobody
+
+[Install]
+WantedBy=multi-user.target
+
