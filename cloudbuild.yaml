@@ -31,28 +31,37 @@ steps:
   # 4. Get the created image JSON metadata and store in GCS
   - id: "export-image-metadata-to-gcs"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    env:
+      - "PROJECT_ID=$PROJECT_ID"
+      - "SHORT_SHA=$SHORT_SHA"
+      - "METADATA_BUCKET=$_METADATA_BUCKET"
     script: |
       #!/usr/bin/env bash
-      set -euo pipefail
+      set -eo pipefail
 
-      echo "==> Fetching latest Golden Image metadata for family mig-test-app..."
+      PROJ="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
+      COMMIT_SHA="${SHORT_SHA:-latest}"
+
+      echo "==> Fetching latest Golden Image metadata for family mig-test-app in project: ${PROJ}..."
       gcloud compute images describe-from-family mig-test-app \
-        --project="${PROJECT_ID}" \
+        --project="${PROJ}" \
         --format="json" > image-metadata.json
 
       IMAGE_NAME=$(gcloud compute images describe-from-family mig-test-app \
-        --project="${PROJECT_ID}" \
+        --project="${PROJ}" \
         --format="value(name)")
 
-      echo "==> Generated JSON metadata for image: $${IMAGE_NAME}"
+      echo "==> Generated JSON metadata for image: ${IMAGE_NAME}"
       cat image-metadata.json
 
-      # DEST="gs://${_METADATA_BUCKET}/image-metadata/${IMAGE_NAME}/${SHORT_SHA}/image-metadata.json
+      DEST="gs://${METADATA_BUCKET}/image-metadata/${IMAGE_NAME}/${COMMIT_SHA}/image-metadata.json"
+      LATEST_DEST="gs://${METADATA_BUCKET}/image-metadata/latest/image-metadata.json"
 
       echo "....................................................................................."
-      echo "📦 Uploading image metadata json to: $${DEST}"
-      gsutil cp image-metadata.json "$${DEST}"
-
+      echo "📦 Uploading image metadata json to: ${DEST}"
+      gsutil cp image-metadata.json "${DEST}"
+      echo "📦 Uploading latest image metadata json to: ${LATEST_DEST}"
+      gsutil cp image-metadata.json "${LATEST_DEST}"
       echo "....................................................................................."
 
 substitutions:
