@@ -37,9 +37,12 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/mig-test-app .
 
 ---
 
-## 3. Endpoints
+## 3. Endpoints & UI Dashboard
 
-- `GET /` — Returns instance metadata (name, id, region, zone, machine type, IP, tags), version, environment, and timestamp.
+- `GET /` — 
+  - **Browser access**: Renders an interactive, responsive **GCP MIG Visualizer Dashboard** displaying real-time VM identity cards, zone/region tags, live polling (auto-refresh) to observe load balancing across MIG VMs, and formatted JSON.
+  - **API / curl access**: Returns the standard JSON response payload.
+- `GET /api` or `GET /?format=json` — Direct raw JSON response.
 - `GET /health` — Returns `{"status": "healthy"}` (HTTP 200).
 - `GET /ready` — Returns `{"status": "ready"}` (HTTP 200).
 - `GET /info` — Returns app name, version, environment, build ID, and Go version.
