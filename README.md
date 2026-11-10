@@ -1,77 +1,535 @@
 # GCP MIG Test Application (`gcp-mig-test-app`)
 
-A lightweight, zero-dependency Go HTTP service used to validate **Google Cloud Managed Instance Groups (MIGs)**, **Instance Templates**, **Packer Golden Images**, **Auto-Healing**, **Rolling Updates**, and **Global External Application Load Balancers**.
+A production-grade, zero-dependency Go HTTP application with a built-in **interactive visual dashboard** designed to validate **Google Cloud Managed Instance Groups (MIGs)**, **Instance Templates**, **Packer Golden Images**, **Auto-Healing**, **Rolling Updates**, and **Global External Application Load Balancers**.
+
+---
+
+## Architecture & CI/CD Workflow
+
+```text
+GitHub Push / Merge
+  │
+  ▼
+Cloud Build (cloudbuild.yaml)
+  ├── 1. Build Static Linux Go Binary (CGO_ENABLED=0, GOOS=linux)
+  ├── 2. Initialize Packer (googlecompute plugin)
+  ├── 3. Bake Golden Image on Debian 12 (packer/mig-test-app.pkr.hcl)
+  └── 4. Export Image Metadata JSON & Upload to GCS Bucket
+        │
+        ▼
+Terraform Infrastructure Pipeline
+  ├── Read Image Metadata JSON from GCS (or image family: mig-test-app)
+  ├── Create Google Compute Instance Template
+  └── Deploy Regional Managed Instance Group (Regional MIG)
+        │
+        ├── Auto-Healing (/health probe)
+        ├── Zero-Downtime Rolling Updates (PROACTIVE / REPLACE)
+        └── Global External Application Load Balancer
+```
 
 ---
 
 ## Project Structure
 
 ```text
-mig-test-app/
-├── main.go                     # Go HTTP server with GCE metadata retrieval
-├── go.mod                      # Go standard library only
-├── cloudbuild.yaml             # CI pipeline to build Go binary & Packer image
-├── README.md                   # Documentation
+gcp-managed-instance-group-templates-app/
+├── main.go                     # HTTP server, GCE metadata client, UI dashboard
+├── go.mod                      # Go standard library only (no external dependencies)
+├── cloudbuild.yaml             # CI/CD pipeline (Go build + Packer + GCS export)
+├── README.md                   # Full documentation & usage guide
 ├── systemd/
-│   └── mig-test-app.service    # systemd service unit
+│   └── mig-test-app.service    # Linux systemd service unit
 └── packer/
-    └── mig-test-app.pkr.hcl    # Single, simple Packer HCL2 template
+    └── mig-test-app.pkr.hcl    # Minimalist Packer HCL2 Golden Image template
 ```
 
 ---
 
-## 1. Local Development
+## Configuration (Environment Variables)
+
+The application configures itself via environment variables with production defaults:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PORT` | `8080` | TCP port on which the HTTP server listens |
+| `VERSION` | `v1.0.0` | Application release version |
+| `ENVIRONMENT` | `dev` | Target environment (`dev`, `staging`, `prod`) |
+| `BUILD_ID` | `local` | Build or image identifier (e.g. `packer-image-v1`, git commit SHA) |
+
+---
+
+## Endpoints & Interactive Visual Dashboard
+
+The application implements automatic **content negotiation**:
+- **Browsers** hitting `GET /` receive a rich, dark-themed **Visual Dashboard UI**.
+- **API clients (`curl`, Load Balancers, monitoring)** receive structured JSON responses.
+
+### 1. Interactive Visual Dashboard (`GET /` in browser)
+
+When accessed via a browser, the dashboard provides:
+- **Instance Identity Card**: Instance Name, Instance ID, Hostname, and Machine Type.
+- **GCP Topology & Network Card**: Region, Zone (highlighted), Internal IP, and External IP.
+- **Build & Provenance Card**: Build ID, Version badge, Environment badge, and Go runtime version.
+- **Security & Tags Card**: Compute Engine Service Account and network tag chips.
+- **Interactive API Endpoint Tester**: Quick-test buttons for `GET /`, `GET /api`, `GET /health`, `GET /ready`, and `GET /info` displaying real-time HTTP response status and latency in milliseconds.
+- **Auto-Poll Toggle (2s)**: Live background polling to observe traffic shifting across different VMs in the MIG during load balancing or rolling updates.
+- **Embedded JSON Inspector**: Formatted live JSON viewer with **"Copy JSON"** and **"Open in Tab ↗"** buttons.
+- **Zero External Dependencies / CDNs**: All HTML, CSS, and JavaScript are embedded directly in the binary—ideal for isolated / VPC-SC environments with no external internet access.
+
+---
+
+### 2. API Endpoints Reference
+
+#### `GET /` (or `GET /api` or `GET /?format=json`)
+Returns complete VM identity, location, and deployment metadata:
 
 ```bash
-go build -o mig-test-app
+curl http://localhost:8080/
+```
+
+```json
+{
+  "status": "success",
+  "message": "Request successfully served by GCP MIG",
+  "hostname": "web-mumbai-abc1",
+  "instance": {
+    "name": "web-mumbai-abc1",
+    "id": "1234567890123456789",
+    "region": "asia-south1",
+    "zone": "asia-south1-a",
+    "machine_type": "e2-medium",
+    "internal_ip": "10.10.1.5",
+    "external_ip": "Unavailable",
+    "tags": [
+      "web-backend",
+      "http-server"
+    ]
+  },
+  "service_account": "sa-mig-runtime@project-id.iam.gserviceaccount.com",
+  "version": "v1.0.0",
+  "environment": "prod",
+  "build_id": "packer-image-v1",
+  "timestamp": "2026-11-10T11:00:00Z"
+}
+```
+
+> **Note**: Outside Google Compute Engine (e.g. running locally), metadata queries safely fall back to `"Unavailable"` without crashing.
+
+#### `GET /health`
+MIG Auto-Healing and Load Balancer health check probe (HTTP `200 OK`):
+
+```bash
+curl http://localhost:8080/health
+```
+
+```json
+{
+  "status": "healthy"
+}
+```
+
+#### `GET /ready`
+Readiness probe for traffic admission (HTTP `200 OK`):
+
+```bash
+curl http://localhost:8080/ready
+```
+
+```json
+{
+  "status": "ready"
+}
+```
+
+#### `GET /info`
+Application provenance and Go runtime version:
+
+```bash
+curl http://localhost:8080/info
+```
+
+```json
+{
+  "app": "gcp-mig-test-app",
+  "version": "v1.0.0",
+  "environment": "prod",
+  "build_id": "packer-image-v1",
+  "go_version": "go1.27.3"
+}
+```
+
+---
+
+## Local Development & Build
+
+### Run Locally
+
+```bash
+go run main.go
+```
+Open [http://localhost:8080](http://localhost:8080) in your browser to view the interactive dashboard.
+
+### Build Binary Locally
+
+```bash
+go build -o mig-test-app .
 ./mig-test-app
 ```
 
----
-
-## 2. Linux Build
+### Compile Static Linux Binary (for GCE / Packer)
 
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/mig-test-app .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/mig-test-app .
 ```
 
 ---
 
-## 3. Endpoints & UI Dashboard
+## Systemd Service
 
-- `GET /` — 
-  - **Browser access**: Renders an interactive, responsive **GCP MIG Visualizer Dashboard** displaying real-time VM identity cards, zone/region tags, live polling (auto-refresh) to observe load balancing across MIG VMs, and formatted JSON.
-  - **API / curl access**: Returns the standard JSON response payload.
-- `GET /api` or `GET /?format=json` — Direct raw JSON response.
-- `GET /health` — Returns `{"status": "healthy"}` (HTTP 200).
-- `GET /ready` — Returns `{"status": "ready"}` (HTTP 200).
-- `GET /info` — Returns app name, version, environment, build ID, and Go version.
+The application runs as a systemd-managed service on GCE VMs:
 
----
+[`systemd/mig-test-app.service`](systemd/mig-test-app.service):
+```ini
+[Unit]
+Description=GCP MIG Test Application
+After=network.target
 
-## 4. Packer Golden Image Build (via Cloud Build)
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mig-test-app
+Restart=always
+RestartSec=5
 
-Submit the build directly to Google Cloud Build:
+Environment=PORT=8080
+Environment=VERSION=v1.0.0
+Environment=ENVIRONMENT=prod
+Environment=BUILD_ID=packer-image-v1
 
-```bash
-gcloud builds submit --config=cloudbuild.yaml --substitutions=_ZONE="asia-south1-a" .
+User=nobody
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-This will:
-1. Compile the Linux Go binary to `build/mig-test-app`.
-2. Run Packer on `debian-12`.
-3. Copy the binary and `systemd` unit to the VM.
-4. Enable `mig-test-app.service` to start on boot.
-5. Create a Golden Image in the `mig-test-app` image family.
-6. Export the image JSON metadata and upload it to the GCS bucket (`gs://<PROJECT_ID>-image-metadata/image-metadata.json`).
-
 ---
 
-## 5. Terraform Health Check Example
+## Packer Golden Image Template
+
+[`packer/mig-test-app.pkr.hcl`](packer/mig-test-app.pkr.hcl) bakes a Debian 12 base image into a production-ready Golden Image:
 
 ```hcl
-http_health_check {
-  port         = 8080
-  request_path = "/health"
+packer {
+  required_plugins {
+    googlecompute = {
+      source  = "github.com/hashicorp/googlecompute"
+      version = ">= 1.1.0"
+    }
+  }
+}
+
+variable "project_id" {
+  type        = string
+  description = "GCP Project ID"
+}
+
+variable "zone" {
+  type        = string
+  default     = "asia-south1-a"
+  description = "GCP Zone for the builder VM"
+}
+
+source "googlecompute" "mig_app" {
+  project_id              = var.project_id
+  zone                    = var.zone
+  source_image_family     = "debian-12"
+  source_image_project_id = ["debian-cloud"]
+  machine_type            = "e2-medium"
+  disk_size               = 10
+  ssh_username            = "packer"
+
+  image_name        = "mig-test-app-{{timestamp}}"
+  image_family      = "mig-test-app"
+  image_description = "GCP MIG Test App Golden Image"
+}
+
+build {
+  sources = ["source.googlecompute.mig_app"]
+
+  # 1. Copy Go binary to VM
+  provisioner "file" {
+    source      = "build/mig-test-app"
+    destination = "/tmp/mig-test-app"
+  }
+
+  # 2. Copy systemd service file to VM
+  provisioner "file" {
+    source      = "systemd/mig-test-app.service"
+    destination = "/tmp/mig-test-app.service"
+  }
+
+  # 3. Install binary and enable systemd service
+  provisioner "shell" {
+    inline = [
+      "sudo mv /tmp/mig-test-app /usr/local/bin/mig-test-app",
+      "sudo chmod +x /usr/local/bin/mig-test-app",
+      "sudo mv /tmp/mig-test-app.service /etc/systemd/system/mig-test-app.service",
+      "sudo systemctl daemon-reload",
+      "sudo systemctl enable mig-test-app.service"
+    ]
+  }
 }
 ```
+
+---
+
+## Cloud Build CI/CD Pipeline
+
+[`cloudbuild.yaml`](cloudbuild.yaml) automates compilation, image creation, and metadata export:
+
+```yaml
+steps:
+  # 1. Build static Linux Go binary
+  - id: "build-go-binary"
+    name: "golang:latest"
+    env:
+      - "CGO_ENABLED=0"
+      - "GOOS=linux"
+      - "GOARCH=amd64"
+    script: |
+      mkdir -p build
+      go build -o build/mig-test-app .
+
+  # 2. Initialize Packer plugin
+  - id: "packer-init"
+    name: "hashicorp/packer:latest"
+    args:
+      - "init"
+      - "packer/mig-test-app.pkr.hcl"
+
+  # 3. Build Golden Image with Packer
+  - id: "packer-build"
+    name: "hashicorp/packer:latest"
+    args:
+      - "build"
+      - "-var"
+      - "project_id=${PROJECT_ID}"
+      - "-var"
+      - "zone=${_ZONE}"
+      - "packer/mig-test-app.pkr.hcl"
+
+  # 4. Get the created image JSON metadata and store in GCS
+  - id: "export-image-metadata-to-gcs"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    env:
+      - "PROJECT_ID=$PROJECT_ID"
+      - "SHORT_SHA=$SHORT_SHA"
+      - "METADATA_BUCKET=$_METADATA_BUCKET"
+    script: |
+      #!/usr/bin/env bash
+      set -eo pipefail
+
+      PROJ="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
+      COMMIT_SHA="${SHORT_SHA:-latest}"
+
+      echo "==> Fetching latest Golden Image metadata for family mig-test-app in project: ${PROJ}..."
+      gcloud compute images describe-from-family mig-test-app \
+        --project="${PROJ}" \
+        --format="json" > image-metadata.json
+
+      IMAGE_NAME=$(gcloud compute images describe-from-family mig-test-app \
+        --project="${PROJ}" \
+        --format="value(name)")
+
+      echo "==> Generated JSON metadata for image: ${IMAGE_NAME}"
+      cat image-metadata.json
+
+      DEST="gs://${METADATA_BUCKET}/image-metadata/${IMAGE_NAME}/${COMMIT_SHA}/image-metadata.json"
+      LATEST_DEST="gs://${METADATA_BUCKET}/image-metadata/latest/image-metadata.json"
+
+      echo "....................................................................................."
+      echo "📦 Uploading image metadata json to: ${DEST}"
+      gsutil cp image-metadata.json "${DEST}"
+      echo "📦 Uploading latest image metadata json to: ${LATEST_DEST}"
+      gsutil cp image-metadata.json "${LATEST_DEST}"
+      echo "....................................................................................."
+
+substitutions:
+  _ZONE: "asia-south1-a"
+  _METADATA_BUCKET: "gcp-tfplans-instancetemplate-strorage-bucket"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"
+```
+
+### Triggering Cloud Build Manually
+
+```bash
+gcloud builds submit --config=cloudbuild.yaml \
+  --substitutions=_ZONE="asia-south1-a",_METADATA_BUCKET="<YOUR_GCS_BUCKET>" \
+  .
+```
+
+### Automated Cloud Build Trigger (GitHub Push to `main`)
+
+```yaml
+app_packer_cicd_trigger:
+  name: "gcp-mig-test-app-packer-build"
+  description: "Build Go binary and create Packer Golden Image on merge to main"
+  filename: "cloudbuild.yaml"
+  repository_key: "gcp_mig_app_repo"
+  push:
+    branch: "^main$"
+  substitutions:
+    _ZONE: "asia-south1-a"
+    _METADATA_BUCKET: "gcp-tfplans-instancetemplate-strorage-bucket"
+```
+
+---
+
+## Terraform Integration Guide
+
+You can integrate the Golden Image with Terraform using either:
+1. **The GCS Metadata JSON export** (recommended for decoupled CI/CD pipelines).
+2. **The Compute Engine image family** (`family/mig-test-app`).
+
+### Option A: Read from GCS Image Metadata JSON
+
+```hcl
+# Read image-metadata.json from GCS
+data "google_storage_bucket_object_content" "image_meta" {
+  bucket = var.metadata_bucket_name
+  name   = "image-metadata/latest/image-metadata.json"
+}
+
+locals {
+  image_data = jsondecode(data.google_storage_bucket_object_content.image_meta.content)
+}
+
+# Instance Template
+resource "google_compute_instance_template" "mig_template" {
+  name_prefix  = "mig-test-app-template-"
+  machine_type = "e2-medium"
+  region       = "asia-south1"
+
+  tags = ["web-backend", "http-server"]
+
+  disk {
+    source_image = local.image_data.selfLink
+    auto_delete  = true
+    boot         = true
+    disk_type    = "pd-balanced"
+    disk_size_gb = local.image_data.diskSizeGb
+  }
+
+  network_interface {
+    network    = var.network_name
+    subnetwork = var.subnet_name
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+```
+
+### Option B: Direct Image Family Reference
+
+```hcl
+resource "google_compute_instance_template" "mig_template" {
+  name_prefix  = "mig-test-app-template-"
+  machine_type = "e2-medium"
+  region       = "asia-south1"
+
+  tags = ["web-backend", "http-server"]
+
+  disk {
+    source_image = "projects/${var.project_id}/global/images/family/mig-test-app"
+    auto_delete  = true
+    boot         = true
+    disk_type    = "pd-balanced"
+    disk_size_gb = 10
+  }
+
+  network_interface {
+    network    = var.network_name
+    subnetwork = var.subnet_name
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+```
+
+### Health Check & Regional Managed Instance Group (MIG)
+
+```hcl
+# HTTP Health Check for Auto-Healing & Load Balancer
+resource "google_compute_health_check" "mig_health_check" {
+  name = "mig-test-app-health-check"
+
+  http_health_check {
+    port         = 8080
+    request_path = "/health"
+  }
+
+  check_interval_sec  = 5
+  timeout_sec         = 2
+  healthy_threshold   = 2
+  unhealthy_threshold = 3
+}
+
+# Regional Managed Instance Group
+resource "google_compute_region_instance_group_manager" "regional_mig" {
+  name               = "mig-test-app-regional-mig"
+  region             = "asia-south1"
+  base_instance_name = "web-mumbai"
+
+  version {
+    instance_template = google_compute_instance_template.mig_template.id
+  }
+
+  target_size = 2
+
+  named_port {
+    name = "http"
+    port = 8080
+  }
+
+  # Auto-Healing Policy
+  auto_healing_policies {
+    health_check      = google_compute_health_check.mig_health_check.id
+    initial_delay_sec = 60
+  }
+
+  # Zero-Downtime Rolling Update Policy
+  update_policy {
+    type                  = "PROACTIVE"
+    minimal_action        = "REPLACE"
+    max_surge_fixed       = 2
+    max_unavailable_fixed = 0
+  }
+}
+```
+
+---
+
+## Validation Scenarios
+
+Using this app, engineers can easily validate key GCP reliability and traffic management features:
+
+1. **Load Balancing & Distribution**
+   - Enable **Auto-Poll (2s)** in the browser dashboard or run `while true; do curl -s http://<LB_IP>/ | jq .instance.name; sleep 1; done`.
+   - Observe responses alternating across different backend VM instance names and zones.
+2. **Packer Image Verification**
+   - Check `build_id` and `version` on the dashboard to verify that the running VMs are using the expected Golden Image build.
+3. **Auto-Healing Validation**
+   - SSH into one VM and stop the service: `sudo systemctl stop mig-test-app`.
+   - Observe the health check fail on `GET /health` and GCP automatically terminate and replace the unhealthy VM.
+4. **Zero-Downtime Rolling Updates**
+   - Push a new version (`v2.0.0`) through Cloud Build and trigger a MIG rolling update.
+   - Keep the browser dashboard open with auto-poll enabled to witness traffic smoothly migrate to the new version without any dropped requests.
+5. **Regional Failover**
+   - Drain or disable backends in one region and watch the Global External Application Load Balancer immediately route traffic to the remaining healthy region.
